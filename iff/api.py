@@ -33,27 +33,33 @@ def create_member(customer_id, plan, pan=None, address_dict=None):
 	# defaults
 	today = getdate()
 	plan = frappe.db.exists("Membership Type", { "razorpay_plan_id": plan })
+	member_name = None
 
-	member = frappe.new_doc("Member")
-	member.update({
-		"member_name": customer.name,
-		"membership_type": plan,
-		"pan_number": pan,
-		"email_id": customer.email,
-		"contact": customer.contact,
-		"customer_id": customer_id,
-		"subscription_status": "Active",
-		"token_status": "Initiated",
-		"subscription_start": today,
-		"subscription_end": add_years(today, 2),
-	})
-	member.insert(ignore_permissions=True)
+	try:
+		member = frappe.new_doc("Member")
+		member.update({
+			"member_name": customer.name,
+			"membership_type": plan,
+			"pan_number": pan,
+			"email_id": customer.email,
+			"contact": customer.contact,
+			"customer_id": customer_id,
+			"subscription_status": "Active",
+			"token_status": "Initiated",
+			"subscription_start": today,
+			"subscription_end": add_years(today, 2),
+		})
+		member.insert(ignore_permissions=True)
 
-	if address_dict:
-		create_address(address_dict, doctype="Member", doc=member)
+		if address_dict:
+			create_address(address_dict, doctype="Member", doc=member)
 
-	return member.name
+		member_name = member.name
+	except Exception as e:
+		title = "E Mandate Member creation failed for Customer {0}:{1}".format(customer_id, customer.email)
+		log = frappe.log_error(e, title)
 
+	return member_name
 
 @frappe.whitelist()
 def create_donor(name, email, contact, pan=None, address_dict=None):
@@ -127,11 +133,6 @@ def verify_signature(data):
 def payment_authorized():
 	# https://razorpay.com/docs/api/recurring-payments/webhooks/#payment-authorized
 	data = frappe.request.get_data(as_text=True)
-	try:
-		verify_signature(data)
-	except Exception as e:
-		log = frappe.log_error(e, "Webhook Verification Error")
-		return { "status": "Failed", "reason": e}
 
 	if isinstance(data, six.string_types):
 		data = json.loads(data)
@@ -139,6 +140,13 @@ def payment_authorized():
 
 	payment = data.payload.get("payment", {}).get("entity", {})
 	payment = frappe._dict(payment)
+
+	try:
+		verify_signature(data)
+	except Exception as e:
+		title = "E Mandate Webhook Verification Error during payment authorization for Payment {0}".format(payment.id)
+		log = frappe.log_error(e, title)
+		return { "status": "Failed", "reason": e}
 
 	controller = frappe.get_doc("Razorpay Settings")
 	controller.init_client()
@@ -167,12 +175,6 @@ def payment_authorized():
 def token_update():
 	# https://razorpay.com/docs/api/recurring-payments/webhooks/#token-confirmed
 	data = frappe.request.get_data(as_text=True)
-	try:
-		verify_signature(data)
-	except Exception as e:
-		log = frappe.log_error(e, "Webhook Verification Error")
-		return { "status": "Failed", "reason": e}
-
 	if isinstance(data, six.string_types):
 		data = json.loads(data)
 	data = frappe._dict(data)
@@ -182,6 +184,14 @@ def token_update():
 	client = controller.client
 
 	token = frappe._dict(data.payload.get("token", {}).get("entity", {}))
+
+	try:
+		verify_signature(data)
+	except Exception as e:
+		title = "E Mandate Webhook Verification Error during Token Update for Token ID {0}".format(token.id)
+		log = frappe.log_error(e, title)
+		return { "status": "Failed", "reason": e}
+
 	member = frappe.db.exists("Member", {"razorpay_token": token.id})
 	if member:
 		token_status = "Initiated"
@@ -199,17 +209,17 @@ def token_update():
 def invoice_paid():
 	# https://razorpay.com/docs/api/recurring-payments/webhooks/
 	data = frappe.request.get_data(as_text=True)
-	try:
-		verify_signature(data)
-	except Exception as e:
-		log = frappe.log_error(e, "Webhook Verification Error")
-		return { "status": "Failed", "reason": e}
-
 	if isinstance(data, six.string_types):
 		data = json.loads(data)
 	data = frappe._dict(data)
 
 	payment = frappe._dict(data.payload.get("payment", {}).get("entity", {}))
+
+	try:
+		verify_signature(data)
+	except Exception as e:
+		log = frappe.log_error(e, "E Mandate Webhook Verification Error during payment update for Payment ID {0}".format(payment.id))
+		return { "status": "Failed", "reason": e}
 
 	if not payment.method == "emandate":
 		return
