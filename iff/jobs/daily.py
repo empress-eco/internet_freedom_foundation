@@ -130,14 +130,19 @@ class EMandatePayment():
 			}
 		}
 
-		payment = make_post_request(
-			url,
-			auth=(self.controller.api_key, self.controller.get_password(fieldname="api_secret", raise_exception=False)),
-			data=json.dumps(data),
-			headers={
-				"content-type": "application/json"
-			}
-		)
+		try:
+			payment = make_post_request(
+				url,
+				auth=(self.controller.api_key, self.controller.get_password(fieldname="api_secret", raise_exception=False)),
+				data=json.dumps(data),
+				headers={
+					"content-type": "application/json"
+				}
+			)
+		except Exception as e:
+			title = "Post request failure for IFF daily: {0}".format(member.name)
+			frappe.log_error(json.dumps(data, indent=4), title)
+			raise e
 
 		return payment.get("razorpay_payment_id")
 
