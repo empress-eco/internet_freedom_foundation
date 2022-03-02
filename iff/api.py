@@ -1,9 +1,10 @@
 import frappe
+import erpnext
 import razorpay
 import six
 import json
 from frappe.integrations.utils import get_payment_gateway_controller, make_post_request
-from frappe.utils import getdate, add_months, add_years
+from frappe.utils import getdate, add_months, add_years, flt
 
 def get_client():
 	controller = get_payment_gateway_controller("Razorpay")
@@ -134,19 +135,19 @@ def payment_authorized():
 	# https://razorpay.com/docs/api/recurring-payments/webhooks/#payment-authorized
 	data = frappe.request.get_data(as_text=True)
 
+	try:
+		verify_signature(data)
+	except Exception as e:
+		title = "E Mandate Webhook Verification Error during payment authorization"
+		frappe.log_error(data, title)
+		return { "status": "Failed", "reason": e}
+
 	if isinstance(data, six.string_types):
 		data = json.loads(data)
 	data = frappe._dict(data)
 
 	payment = data.payload.get("payment", {}).get("entity", {})
 	payment = frappe._dict(payment)
-
-	try:
-		verify_signature(data)
-	except Exception as e:
-		title = "E Mandate Webhook Verification Error during payment authorization for Payment {0}".format(payment.id)
-		log = frappe.log_error(e, title)
-		return { "status": "Failed", "reason": e}
 
 	controller = frappe.get_doc("Razorpay Settings")
 	controller.init_client()
@@ -175,6 +176,14 @@ def payment_authorized():
 def token_update():
 	# https://razorpay.com/docs/api/recurring-payments/webhooks/#token-confirmed
 	data = frappe.request.get_data(as_text=True)
+
+	try:
+		verify_signature(data)
+	except Exception as e:
+		title = "E Mandate Webhook Verification Error during Token Update"
+		frappe.log_error(data, title)
+		return { "status": "Failed", "reason": e}
+
 	if isinstance(data, six.string_types):
 		data = json.loads(data)
 	data = frappe._dict(data)
@@ -184,13 +193,6 @@ def token_update():
 	client = controller.client
 
 	token = frappe._dict(data.payload.get("token", {}).get("entity", {}))
-
-	try:
-		verify_signature(data)
-	except Exception as e:
-		title = "E Mandate Webhook Verification Error during Token Update for Token ID {0}".format(token.id)
-		log = frappe.log_error(e, title)
-		return { "status": "Failed", "reason": e}
 
 	member = frappe.db.exists("Member", {"razorpay_token": token.id})
 	if member:
@@ -209,17 +211,18 @@ def token_update():
 def invoice_paid():
 	# https://razorpay.com/docs/api/recurring-payments/webhooks/
 	data = frappe.request.get_data(as_text=True)
+
+	try:
+		verify_signature(data)
+	except Exception as e:
+		log = frappe.log_error(data, "E Mandate Webhook Verification Error during payment update")
+		return {"status": "Failed", "reason": e}
+
 	if isinstance(data, six.string_types):
 		data = json.loads(data)
 	data = frappe._dict(data)
 
 	payment = frappe._dict(data.payload.get("payment", {}).get("entity", {}))
-
-	try:
-		verify_signature(data)
-	except Exception as e:
-		log = frappe.log_error(e, "E Mandate Webhook Verification Error during payment update for Payment ID {0}".format(payment.id))
-		return { "status": "Failed", "reason": e}
 
 	if not payment.method == "emandate":
 		return
@@ -277,3 +280,59 @@ def invoice_paid():
 @frappe.whitelist(allow_guest=True)
 def ping():
 	return "pong"
+
+@frappe.whitelist(allow_guest=True)
+def notify_donation_payment_failures(*args, **kwargs):
+	"""
+		Notifies donor with the payment failure
+	"""
+	from erpnext.non_profit.doctype.membership.membership import verify_signature as verify_donation_signature
+
+	if not frappe.db.get_single_value('Non Profit Settings', 'notify_donation_payment_failures'):
+		return
+
+	data = frappe.request.get_data(as_text=True)
+
+	try:
+		verify_donation_signature(data, endpoint='Donation')
+	except Exception as e:
+		frappe.log_error(data, 'Donation Webhook Verification Error')
+		return { 'status': 'Failed', 'reason': e }
+
+	if isinstance(data, six.string_types):
+		data = json.loads(data)
+
+	data = frappe._dict(data)
+	payment = data.payload.get('payment', {}).get('entity', {})
+	payment = frappe._dict(payment)
+
+	if not data.event == 'payment.failed':
+		return
+
+	# to avoid capturing subscription payments as donations
+	if payment.get('description') and 'subscription' in str(payment.description).lower():
+		return
+
+	context = {
+		'email': payment.email,
+		'amount': flt(payment.amount) / 100, # Convert to rupees from paise
+	}
+
+	if type(payment.notes) == dict:
+		for k, v in payment.notes.items():
+			# extract donor name from notes
+			if 'name' in k.lower():
+				context['donor_name'] = v
+
+	if not context.get('donor_name'):
+		context['donor_name'] = context['email']
+
+	template = frappe.db.get_single_value('Non Profit Settings', 'email_template_for_failure')
+	template = frappe.get_doc('Email Template', template)
+
+	frappe.sendmail(recipients=payment.email,
+		subject=template.subject,
+		message=frappe.render_template(template.response_html, context)
+	)
+
+	return { 'status': 'Success' }

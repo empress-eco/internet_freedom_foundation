@@ -5,6 +5,23 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_field
 
 def after_install():
 	create_e_mandate_custom_fields()
+
+	create_custom_field('Non Profit Settings', {
+		'label': _('Notify Payment Failures'),
+		'fieldname': 'notify_donation_payment_failures',
+		'fieldtype': 'Check',
+		'insert_after': 'donation_payment_account'
+	})
+	create_custom_field('Non Profit Settings', {
+		'label': _('Email Template'),
+		'fieldname': 'email_template_for_failure',
+		'fieldtype': 'Link',
+		'options': 'Email Template',
+		'depends_on': 'notify_donation_payment_failures',
+		'mandatory_depends_on': 'notify_donation_payment_failures',
+		'insert_after': 'notify_donation_payment_failures'
+	})
+
 	frappe.db.commit()
 
 def create_e_mandate_custom_fields():
