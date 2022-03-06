@@ -330,9 +330,11 @@ def notify_donation_payment_failures(*args, **kwargs):
 	template = frappe.db.get_single_value('Non Profit Settings', 'email_template_for_failure')
 	template = frappe.get_doc('Email Template', template)
 
+	content = template.response_html if template.use_html else template.response
+
 	frappe.sendmail(recipients=payment.email,
 		subject=template.subject,
-		message=frappe.render_template(template.response_html, context)
+		message=frappe.render_template(content, context)
 	)
 
 	return { 'status': 'Success' }
