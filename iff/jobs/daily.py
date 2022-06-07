@@ -63,12 +63,12 @@ class EMandatePayment():
 			member = frappe.get_doc("Member", member_name[0])
 
 			expiry = None
-			last_membership = get_last_membership(member.name)
-			if last_membership:
-				expiry = last_membership["to_date"]
-
-			if not expiry and member.membership_expiry_date:
+			if member.membership_expiry_date:
 				expiry = member.membership_expiry_date
+			else:
+				last_membership = get_last_membership(member.name)
+				if last_membership:
+					expiry = last_membership["to_date"]
 
 			if (
 				member.subscription_end \
